@@ -1,13 +1,26 @@
 // Eligibility calculation engine
-import { differenceInDays, differenceInMonths, addDays, addYears, parseISO, isAfter, isBefore } from 'date-fns'
+import {
+  differenceInDays,
+  differenceInMonths,
+  addDays,
+  addYears,
+  addMonths,
+  subYears,
+  parseISO,
+  isAfter,
+  isBefore,
+} from 'date-fns'
 
+// Public API
 export function calculateEligibility(profile, trips, asOfDate = new Date()) {
   if (!profile) {
     return {
       eligible: false,
       blockers: ['No profile configured'],
       warnings: [],
-      metrics: {}
+      metrics: {},
+      earliestFilingDate: null,
+      lowerRiskFilingDate: null,
     }
   }
 
@@ -20,18 +33,12 @@ export function calculateEligibility(profile, trips, asOfDate = new Date()) {
   const warnings = []
   const metrics = {}
 
-  // 1. Age requirement (must be 18+)
+  // 1) Age requirement (18+ at asOfDate)
   const ageAtFiling = differenceInYears(asOfDate, dob)
-  metrics.age = {
-    current: ageAtFiling,
-    required: 18,
-    met: ageAtFiling >= 18
-  }
-  if (ageAtFiling < 18) {
-    blockers.push(`Must be 18 years old (currently ${ageAtFiling})`)
-  }
+  metrics.age = { current: ageAtFiling, required: 18, met: ageAtFiling >= 18 }
+  if (ageAtFiling < 18) blockers.push(`Must be 18 years old (currently ${ageAtFiling})`)
 
-  // 2. Green card time (continuous residence window)
+  // 2) Green card time (5y/3y, with 90-day early filing)
   const requiredYears = eligibilityPath === '3-year-spouse' ? 3 : 5
   const earlyFilingDays = 90
   const targetDate = addYears(lprDate, requiredYears)
@@ -41,56 +48,77 @@ export function calculateEligibility(profile, trips, asOfDate = new Date()) {
 
   metrics.greenCardTime = {
     daysSinceLPR: daysAsLPR,
-    daysRequired: daysRequired,
+    daysRequired,
     targetDate: targetDate.toISOString(),
     earlyFilingDate: earlyFilingDate.toISOString(),
-    met: isAfter(asOfDate, earlyFilingDate) || asOfDate.getTime() === earlyFilingDate.getTime()
+    met: !isBefore(asOfDate, earlyFilingDate), // inclusive
   }
 
   if (isBefore(asOfDate, earlyFilingDate)) {
     const daysRemaining = differenceInDays(earlyFilingDate, asOfDate)
-    blockers.push(`Need ${daysRemaining} more days as LPR (eligible on ${earlyFilingDate.toLocaleDateString()})`)
+    blockers.push(
+      `Need ${daysRemaining} more days as LPR (eligible on ${earlyFilingDate.toLocaleDateString()})`
+    )
   }
 
-  // 3. State/district residence (3 months)
-  const daysinState = differenceInDays(asOfDate, stateResidenceDate)
+  // 3) State/district residence (90 days)
+  const daysInState = differenceInDays(asOfDate, stateResidenceDate)
+  const stateEligibleDate = addDays(stateResidenceDate, 90)
+
   metrics.stateResidence = {
-    days: daysinState,
+    days: daysInState,
     required: 90,
-    met: daysinState >= 90,
-    state: profile.state
+    met: daysInState >= 90,
+    state: profile.state,
+    eligibleDate: stateEligibleDate.toISOString(),
   }
 
-  if (daysinState < 90) {
-    const remaining = 90 - daysinState
-    blockers.push(`Need ${remaining} more days in ${profile.state} (eligible on ${addDays(stateResidenceDate, 90).toLocaleDateString()})`)
+  if (daysInState < 90) {
+    const remaining = 90 - daysInState
+    blockers.push(
+      `Need ${remaining} more days in ${profile.state} (eligible on ${stateEligibleDate.toLocaleDateString()})`
+    )
   }
 
-  // 4. Absences / continuous residence
-  const absenceAnalysis = analyzeAbsences(trips, lprDate, asOfDate, requiredYears)
+  // 4) Absences / continuous residence analysis + recovery dates (two-date model)
+  const absenceAnalysis = analyzeAbsences(trips, lprDate, asOfDate, requiredYears, eligibilityPath)
   metrics.absences = absenceAnalysis
 
   if (absenceAnalysis.continuityBroken) {
     blockers.push('Continuous residence broken by absence of 1+ year')
   }
-
   absenceAnalysis.warnings.forEach(w => warnings.push(w))
 
-  // 5. Physical presence (at least half the required period)
-  const physicalPresence = calculatePhysicalPresence(trips, lprDate, asOfDate, requiredYears)
+  // 5) Physical presence (913 days in last 5 years; 548 in last 3 years)
+  const physicalPresence = calculatePhysicalPresence(trips, asOfDate, eligibilityPath)
   metrics.physicalPresence = physicalPresence
 
-  const requiredDays = Math.floor(daysRequired / 2)
-  if (physicalPresence.daysInUS < requiredDays) {
-    const shortage = requiredDays - physicalPresence.daysInUS
-    blockers.push(`Need ${shortage} more days of physical presence in the US`)
+  if (!physicalPresence.met) {
+    blockers.push(
+      `Need ${physicalPresence.shortage} more days of physical presence in the US (requires ${physicalPresence.requiredDaysInUS} days in last ${physicalPresence.windowYears} years)`
+    )
   }
 
-  // Determine earliest filing date
-  let earliestFilingDate = earlyFilingDate
-  const stateEligibleDate = addDays(stateResidenceDate, 90)
-  if (isAfter(stateEligibleDate, earliestFilingDate)) {
-    earliestFilingDate = stateEligibleDate
+  // Earliest dates (combine constraints)
+  // Base constraints: early filing date + state 90-day date
+  let earliestPossibleFilingDate = maxDate(earlyFilingDate, stateEligibleDate)
+  let lowerRiskFilingDate = maxDate(earlyFilingDate, stateEligibleDate)
+
+  // Add continuity recovery constraints (5-year mode only; may be null)
+  if (absenceAnalysis.earliestPossibleAfterContinuityIssue) {
+    earliestPossibleFilingDate = maxDate(
+      earliestPossibleFilingDate,
+      parseISO(absenceAnalysis.earliestPossibleAfterContinuityIssue)
+    )
+  }
+  if (absenceAnalysis.lowerRiskAfterContinuityIssue) {
+    lowerRiskFilingDate = maxDate(
+      lowerRiskFilingDate,
+      parseISO(absenceAnalysis.lowerRiskAfterContinuityIssue)
+    )
+  } else {
+    // If there's no 6–12 month continuity issue, don't show a separate lower-risk date
+    lowerRiskFilingDate = null
   }
 
   return {
@@ -98,17 +126,25 @@ export function calculateEligibility(profile, trips, asOfDate = new Date()) {
     blockers,
     warnings,
     metrics,
-    earliestFilingDate: earliestFilingDate.toISOString()
+    earliestFilingDate: earliestPossibleFilingDate ? earliestPossibleFilingDate.toISOString() : null,
+    lowerRiskFilingDate: lowerRiskFilingDate ? lowerRiskFilingDate.toISOString() : null,
   }
 }
 
-function analyzeAbsences(trips, lprDate, asOfDate, requiredYears) {
+/**
+ * Absence / continuity analysis:
+ * - ≥365 days => continuity broken + compute recovery date (return + 4y + 1d)
+ * - >180 and <365 => continuity risk + compute:
+ *   - earliestPossibleAfterContinuityIssue = return + 4y + 1d
+ *   - lowerRiskAfterContinuityIssue = return + 4y + 6m
+ */
+function analyzeAbsences(trips, lprDate, asOfDate, requiredYears, eligibilityPath) {
   const relevantTrips = trips
     .map(t => ({
       ...t,
       start: parseISO(t.startDate),
       end: parseISO(t.endDate),
-      days: differenceInDays(parseISO(t.endDate), parseISO(t.startDate))
+      days: differenceInDays(parseISO(t.endDate), parseISO(t.startDate)),
     }))
     .filter(t => t.countAsAbsence !== false)
     .filter(t => isAfter(t.start, lprDate) || t.start.getTime() === lprDate.getTime())
@@ -117,13 +153,32 @@ function analyzeAbsences(trips, lprDate, asOfDate, requiredYears) {
   const warnings = []
   let continuityBroken = false
 
+  // Only compute these “recovery” dates for the 5-year path per your request
+  let earliestPossibleAfterContinuityIssue = null
+  let lowerRiskAfterContinuityIssue = null
+
   relevantTrips.forEach(trip => {
     if (trip.days >= 365) {
       continuityBroken = true
-    } else if (trip.days >= 180 && trip.days < 365) {
       warnings.push(
-        `Trip to ${trip.destination || 'unknown'} (${trip.start.toLocaleDateString()}) was ${trip.days} days - may raise continuity questions`
+        `Trip to ${trip.destination || 'unknown'} (${trip.start.toLocaleDateString()}) was ${trip.days} days (≥ 1 year) - may break continuous residence`
       )
+
+      if (eligibilityPath === '5-year') {
+        const earliest = addDays(addYears(trip.end, 4), 1) // return + 4y + 1d
+        earliestPossibleAfterContinuityIssue = maxDate(earliestPossibleAfterContinuityIssue, earliest)
+      }
+    } else if (trip.days > 180 && trip.days < 365) {
+      warnings.push(
+        `Trip to ${trip.destination || 'unknown'} (${trip.start.toLocaleDateString()}) was ${trip.days} days (> 6 months) - may raise continuous residence questions`
+      )
+
+      if (eligibilityPath === '5-year') {
+        const earliest = addDays(addYears(trip.end, 4), 1) // return + 4y + 1d
+        const lowerRisk = addMonths(addYears(trip.end, 4), 6) // return + 4y + 6m
+        earliestPossibleAfterContinuityIssue = maxDate(earliestPossibleAfterContinuityIssue, earliest)
+        lowerRiskAfterContinuityIssue = maxDate(lowerRiskAfterContinuityIssue, lowerRisk)
+      }
     }
   })
 
@@ -134,21 +189,32 @@ function analyzeAbsences(trips, lprDate, asOfDate, requiredYears) {
     totalDaysAbsent,
     continuityBroken,
     warnings,
-    longAbsences: relevantTrips.filter(t => t.days >= 180)
+    longAbsences: relevantTrips.filter(t => t.days >= 180),
+    earliestPossibleAfterContinuityIssue: earliestPossibleAfterContinuityIssue
+      ? earliestPossibleAfterContinuityIssue.toISOString()
+      : null,
+    lowerRiskAfterContinuityIssue: lowerRiskAfterContinuityIssue
+      ? lowerRiskAfterContinuityIssue.toISOString()
+      : null,
   }
 }
 
-function calculatePhysicalPresence(trips, lprDate, asOfDate, requiredYears) {
-  const windowStart = lprDate
+/**
+ * Physical presence:
+ * - 5-year: require 913 days in last 5 years
+ * - 3-year: require 548 days in last 3 years
+ */
+function calculatePhysicalPresence(trips, asOfDate, eligibilityPath) {
+  const windowYears = eligibilityPath === '3-year-spouse' ? 3 : 5
+  const requiredDaysInUS = eligibilityPath === '3-year-spouse' ? 548 : 913
+
+  const windowStart = subYears(asOfDate, windowYears)
   const windowEnd = asOfDate
   const totalDays = differenceInDays(windowEnd, windowStart)
 
   const daysAbroad = trips
     .filter(t => t.countAsAbsence !== false)
-    .map(t => ({
-      start: parseISO(t.startDate),
-      end: parseISO(t.endDate)
-    }))
+    .map(t => ({ start: parseISO(t.startDate), end: parseISO(t.endDate) }))
     .filter(t => isAfter(t.end, windowStart) && isBefore(t.start, windowEnd))
     .reduce((sum, t) => {
       const tripStart = isBefore(t.start, windowStart) ? windowStart : t.start
@@ -157,13 +223,26 @@ function calculatePhysicalPresence(trips, lprDate, asOfDate, requiredYears) {
     }, 0)
 
   const daysInUS = totalDays - daysAbroad
+  const met = daysInUS >= requiredDaysInUS
+  const shortage = met ? 0 : requiredDaysInUS - daysInUS
 
   return {
     daysInUS,
     daysAbroad,
     totalDays,
-    percentInUS: totalDays > 0 ? (daysInUS / totalDays * 100).toFixed(1) : 0
+    windowYears,
+    requiredDaysInUS,
+    met,
+    shortage,
+    percentOfRequirement: requiredDaysInUS > 0 ? (daysInUS / requiredDaysInUS) * 100 : 0,
   }
+}
+
+// Helpers
+function maxDate(a, b) {
+  if (!a) return b
+  if (!b) return a
+  return isAfter(a, b) ? a : b
 }
 
 function differenceInYears(later, earlier) {
