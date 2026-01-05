@@ -1,0 +1,6 @@
+Dashboard Showing Progress (Four Timebound Metrics (State Residence, GC holder time, Absences, Age) 
+Ability to input all of this information including all trips. 
+A page for practicing the n-400 test with client side saving of results allowing you to track progress. Should also have like data visualizations on overall rate of success incuding other things like performance in certain sections. 
+Dynamic Map showing days per location 
+Ability to export a "data pack" for printing which can be included in someone's application packet (what they bring to the interview). 
+Probably will be done in react/vite. Needs to be client side 100%
