@@ -1,0 +1,100 @@
+
+QUICK START GUIDE
+=================
+
+For experienced developers:
+---------------------------
+
+# Setup
+mkdir naturalization-tracker && cd naturalization-tracker
+mkdir -p src/components src/utils
+
+# Copy all generated files to their locations (see DIRECTORY_STRUCTURE.txt)
+
+# Install & run
+npm install
+npm run dev
+
+# Build for production
+npm run build
+
+Done! App runs at http://localhost:5173
+
+
+For beginners:
+--------------
+
+1. Install Node.js from https://nodejs.org (get LTS version)
+
+2. Create folders:
+   - Make a folder called "naturalization-tracker"
+   - Inside it, make a folder called "src"
+   - Inside "src", make folders "components" and "utils"
+
+3. Copy files:
+   - Put all the generated files in the right folders
+   - Check DIRECTORY_STRUCTURE.txt to see where each file goes
+
+4. Open Terminal/Command Prompt:
+   - Navigate to your project folder
+   - Windows: cd C:\path\to\naturalization-tracker
+   - Mac/Linux: cd /path/to/naturalization-tracker
+
+5. Install:
+   Type: npm install
+   Press Enter and wait
+
+6. Run:
+   Type: npm run dev
+   Press Enter
+
+7. Open browser:
+   Go to: http://localhost:5173
+
+You should see the app running!
+
+
+Common Issues:
+--------------
+
+"npm not found":
+→ Install Node.js first
+
+"Module not found":
+→ Check file locations match directory structure
+
+"Port already in use":
+→ Change port in vite.config.js or kill other process
+
+"IndexedDB error":
+→ Use a modern browser, enable IndexedDB in settings
+
+
+File Checklist:
+---------------
+□ package.json (root)
+□ vite.config.js (root)
+□ index.html (root)
+□ README.md (root)
+□ src/main.jsx
+□ src/App.jsx
+□ src/App.css
+□ src/index.css
+□ src/components/EligibilityDashboard.jsx
+□ src/components/ProfileForm.jsx
+□ src/components/TripManager.jsx
+□ src/components/CivicsTest.jsx
+□ src/components/LocationMap.jsx
+□ src/components/DataPackExport.jsx
+□ src/utils/eligibilityUtils.js
+□ src/utils/storage.js
+□ src/utils/civicsQuestions.js
+
+If all checkboxes are complete, run npm install!
+
+
+Need help?
+----------
+Read README.md for full documentation
+Check INSTALLATION_CHECKLIST.txt for detailed steps
+Review FILE_MANIFEST.txt for complete file listing

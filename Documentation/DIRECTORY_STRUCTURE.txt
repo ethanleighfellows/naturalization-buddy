@@ -1,0 +1,69 @@
+
+DIRECTORY STRUCTURE SETUP
+=========================
+
+Create the following folder structure:
+
+naturalization-tracker/
+├── package.json
+├── vite.config.js
+├── index.html
+├── README.md
+├── setup.sh
+└── src/
+    ├── main.jsx
+    ├── App.jsx
+    ├── App.css
+    ├── index.css
+    ├── components/
+    │   ├── EligibilityDashboard.jsx
+    │   ├── ProfileForm.jsx
+    │   ├── TripManager.jsx
+    │   ├── CivicsTest.jsx
+    │   ├── LocationMap.jsx
+    │   └── DataPackExport.jsx
+    └── utils/
+        ├── eligibilityUtils.js
+        ├── storage.js
+        └── civicsQuestions.js
+
+FILE PLACEMENT GUIDE:
+====================
+
+Root directory (naturalization-tracker/):
+- package.json
+- vite.config.js
+- index.html
+- README.md
+- setup.sh
+
+src/ directory:
+- main.jsx
+- App.jsx
+- App.css
+- index.css
+
+src/components/ directory:
+- EligibilityDashboard.jsx
+- ProfileForm.jsx
+- TripManager.jsx
+- CivicsTest.jsx
+- LocationMap.jsx
+- DataPackExport.jsx
+
+src/utils/ directory:
+- eligibilityUtils.js
+- storage.js
+- civicsQuestions.js
+
+SETUP STEPS:
+============
+
+1. Create the directory structure above
+2. Copy each file to its respective location
+3. Open terminal in the root directory
+4. Run: npm install
+5. Run: npm run dev
+6. Open browser to http://localhost:5173
+
+You can also run: bash setup.sh (on Unix/Mac) or run the npm commands manually.

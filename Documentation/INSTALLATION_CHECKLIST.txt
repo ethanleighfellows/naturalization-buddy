@@ -1,0 +1,75 @@
+
+INSTALLATION CHECKLIST
+======================
+
+□ Step 1: Create project folder
+   mkdir naturalization-tracker
+   cd naturalization-tracker
+
+□ Step 2: Create subdirectories
+   mkdir src
+   mkdir src/components
+   mkdir src/utils
+
+□ Step 3: Copy all files to correct locations (see directory structure)
+
+□ Step 4: Install dependencies
+   npm install
+
+□ Step 5: Verify installation
+   All packages should install without errors
+
+□ Step 6: Start development server
+   npm run dev
+
+□ Step 7: Test in browser
+   Navigate to http://localhost:5173
+   You should see "Naturalization Eligibility Tracker" header
+
+□ Step 8: Test basic functionality
+   - Create a profile
+   - Add a trip
+   - View dashboard
+   - Try civics quiz
+
+TROUBLESHOOTING:
+================
+
+If you encounter errors:
+
+1. "Module not found" errors:
+   - Check file locations match directory structure
+   - Ensure all imports use correct paths
+   - Verify case sensitivity in filenames
+
+2. npm install fails:
+   - Update Node.js to version 16 or higher
+   - Clear npm cache: npm cache clean --force
+   - Delete node_modules and package-lock.json, retry
+
+3. Build errors:
+   - Check that all JSX files have .jsx extension
+   - Verify all imports have correct file extensions
+   - Check for syntax errors in code
+
+4. Runtime errors:
+   - Check browser console for errors
+   - Ensure IndexedDB is supported in your browser
+   - Try in incognito/private mode
+
+PRODUCTION DEPLOYMENT:
+======================
+
+For production use:
+
+1. Build the app:
+   npm run build
+
+2. The dist/ folder will contain optimized static files
+
+3. Deploy options:
+   - Serve from any static web host
+   - Open dist/index.html directly in browser
+   - Use GitHub Pages, Netlify, Vercel, etc.
+
+4. No backend required - fully client-side!
