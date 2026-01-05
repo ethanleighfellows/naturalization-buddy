@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from 'react'
 import { calculateEligibility } from '../utils/eligibilityUtils'
-import { format, parseISO, addDays } from 'date-fns'
+import { format, parseISO } from 'date-fns'
 
 export default function EligibilityDashboard({ profile, trips }) {
   const [scenarioMode, setScenarioMode] = useState('today')
@@ -19,7 +19,7 @@ export default function EligibilityDashboard({ profile, trips }) {
     return <div>Please set up your profile first.</div>
   }
 
-  const { eligible, blockers, warnings, metrics, earliestFilingDate } = eligibility
+  const { eligible, blockers, warnings, metrics, earliestFilingDate, lowerRiskFilingDate } = eligibility
 
   return (
     <div className="eligibility-dashboard">
@@ -54,9 +54,20 @@ export default function EligibilityDashboard({ profile, trips }) {
       <div className={`status-card ${eligible ? 'eligible' : 'not-eligible'}`}>
         <h2>{eligible ? '✅ Eligible to File!' : '⏳ Not Yet Eligible'}</h2>
         {!eligible && earliestFilingDate && (
-          <p className="earliest-date">
-            Earliest recommended filing: {format(parseISO(earliestFilingDate), 'MMMM d, yyyy')}
-          </p>
+          <div className="filing-dates">
+            <p className="earliest-date">
+              <strong>Earliest possible filing:</strong>{' '}
+              {format(parseISO(earliestFilingDate), 'MMMM d, yyyy')}
+              {lowerRiskFilingDate && <span className="note"> (may require additional documentation)</span>}
+            </p>
+            {lowerRiskFilingDate && (
+              <p className="lower-risk-date">
+                <strong>Lower-risk filing date:</strong>{' '}
+                {format(parseISO(lowerRiskFilingDate), 'MMMM d, yyyy')}
+                <span className="note"> (long trip outside 180-day lookback window)</span>
+              </p>
+            )}
+          </div>
         )}
       </div>
 
@@ -138,14 +149,16 @@ export default function EligibilityDashboard({ profile, trips }) {
             <div 
               className="progress-bar"
               style={{ 
-                width: `${metrics.physicalPresence.percentInUS}%` 
+                width: `${Math.min(100, metrics.physicalPresence.percentOfRequirement)}%` 
               }}
             />
           </div>
           <p>
-            {metrics.physicalPresence.daysInUS} days in US ({metrics.physicalPresence.percentInUS}%)
+            {metrics.physicalPresence.daysInUS} / {metrics.physicalPresence.requiredDaysInUS} days 
+            ({metrics.physicalPresence.percentOfRequirement.toFixed(1)}%)
+            {metrics.physicalPresence.met ? ' ✓' : ''}
           </p>
-          <small>{metrics.physicalPresence.daysAbroad} days abroad</small>
+          <small>{metrics.physicalPresence.daysAbroad} days abroad in last {metrics.physicalPresence.windowYears} years</small>
         </div>
 
         {/* Absences */}
@@ -171,6 +184,11 @@ export default function EligibilityDashboard({ profile, trips }) {
           <li>LPR since: {format(parseISO(profile.lprDate), 'MMMM d, yyyy')}</li>
           <li>Current state: {profile.state} (since {format(parseISO(profile.stateResidenceDate), 'MMMM d, yyyy')})</li>
           <li>Trips logged: {trips.length}</li>
+          {metrics.absences.longAbsences.length > 0 && (
+            <li className="warning-text">
+              {metrics.absences.longAbsences.length} trip(s) over 180 days may affect continuous residence
+            </li>
+          )}
         </ul>
       </div>
     </div>

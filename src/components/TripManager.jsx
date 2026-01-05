@@ -1,5 +1,5 @@
 import React, { useState } from 'react'
-import { format, parseISO, differenceInDays } from 'date-fns'
+import { format, parseISO, differenceInDays, isValid } from 'date-fns'
 
 export default function TripManager({ trips, onUpdate }) {
   const [editingId, setEditingId] = useState(null)
@@ -7,9 +7,42 @@ export default function TripManager({ trips, onUpdate }) {
     startDate: '',
     endDate: '',
     destination: '',
-    countAsAbsence: true
+    countAsAbsence: true,
   })
   const [csvText, setCsvText] = useState('')
+  const [destinationInput, setDestinationInput] = useState('')
+
+  const resetForm = () => {
+    setEditingId(null)
+    setFormData({ startDate: '', endDate: '', destination: '', countAsAbsence: true })
+    setDestinationInput('')
+  }
+
+  // Parse destinations as array (comma-separated)
+  const getDestinations = (destString) => {
+    if (!destString) return []
+    return destString.split(',').map(d => d.trim()).filter(Boolean)
+  }
+
+  const addDestination = () => {
+    if (!destinationInput.trim()) return
+    
+    const current = getDestinations(formData.destination)
+    if (current.includes(destinationInput.trim())) {
+      alert('This destination is already added')
+      return
+    }
+    
+    const updated = [...current, destinationInput.trim()].join(', ')
+    setFormData({ ...formData, destination: updated })
+    setDestinationInput('')
+  }
+
+  const removeDestination = (dest) => {
+    const current = getDestinations(formData.destination)
+    const updated = current.filter(d => d !== dest).join(', ')
+    setFormData({ ...formData, destination: updated })
+  }
 
   const handleAdd = () => {
     if (!formData.startDate || !formData.endDate) {
@@ -22,22 +55,25 @@ export default function TripManager({ trips, onUpdate }) {
       return
     }
 
-    const newTrip = {
-      id: Date.now(),
-      ...formData
-    }
-
+    const newTrip = { id: Date.now(), ...formData }
     onUpdate([...trips, newTrip])
-    setFormData({ startDate: '', endDate: '', destination: '', countAsAbsence: true })
+    resetForm()
   }
 
   const handleUpdate = (id) => {
-    const updated = trips.map(t => 
-      t.id === id ? { ...t, ...formData } : t
-    )
+    if (!formData.startDate || !formData.endDate) {
+      alert('Please fill start and end dates')
+      return
+    }
+
+    if (new Date(formData.endDate) < new Date(formData.startDate)) {
+      alert('End date must be after start date')
+      return
+    }
+
+    const updated = trips.map(t => (t.id === id ? { ...t, ...formData } : t))
     onUpdate(updated)
-    setEditingId(null)
-    setFormData({ startDate: '', endDate: '', destination: '', countAsAbsence: true })
+    resetForm()
   }
 
   const handleDelete = (id) => {
@@ -52,42 +88,101 @@ export default function TripManager({ trips, onUpdate }) {
       startDate: trip.startDate,
       endDate: trip.endDate,
       destination: trip.destination || '',
-      countAsAbsence: trip.countAsAbsence !== false
+      countAsAbsence: trip.countAsAbsence !== false,
     })
+    setDestinationInput('')
+  }
+
+  // ---- Robust CSV import (prevents date-fns "Invalid time value" crashes) ----
+  const normalizeCSVCell = (s) =>
+    (s ?? '').toString().trim().replace(/^"(.*)"$/, '$1')
+
+  const isISODateOnly = (s) => /^\d{4}-\d{2}-\d{2}$/.test(s)
+
+  const parseCountFlag = (s) => {
+    const v = normalizeCSVCell(s).toLowerCase()
+    if (v === '' || v === 'true' || v === 'yes' || v === '1') return true
+    if (v === 'false' || v === 'no' || v === '0') return false
+    return true
   }
 
   const handleCSVImport = () => {
     try {
-      const lines = csvText.trim().split('\n')
-      const header = lines[0].toLowerCase()
+      const lines = csvText
+        .split('\n')
+        .map(l => l.trim())
+        .filter(Boolean)
 
-      if (!header.includes('start') || !header.includes('end')) {
-        alert('CSV must have startDate and endDate columns')
+      if (lines.length === 0) {
+        alert('CSV is empty')
         return
       }
 
-      const newTrips = lines.slice(1).map((line, idx) => {
-        const parts = line.split(',')
-        return {
-          id: Date.now() + idx,
-          startDate: parts[0].trim(),
-          endDate: parts[1].trim(),
-          destination: parts[2]?.trim() || '',
-          countAsAbsence: parts[3]?.trim().toLowerCase() !== 'false'
+      const rows = lines.map(line => line.split(',').map(normalizeCSVCell))
+
+      const firstRowLower = rows[0].map(c => c.toLowerCase())
+      const hasHeader =
+        firstRowLower.some(c => c.includes('start')) ||
+        firstRowLower.some(c => c.includes('end'))
+
+      const dataRows = hasHeader ? rows.slice(1) : rows
+
+      const newTrips = []
+      const errors = []
+
+      dataRows.forEach((cols, idx) => {
+        const startDateRaw = cols[0] || ''
+        const endDateRaw = cols[1] || ''
+        const destination = cols[2] || ''
+        const countAsAbsence = parseCountFlag(cols[3])
+
+        if (!isISODateOnly(startDateRaw) || !isISODateOnly(endDateRaw)) {
+          errors.push(
+            `Row ${idx + 1}: dates must be YYYY-MM-DD (got "${startDateRaw}" and "${endDateRaw}")`
+          )
+          return
         }
+
+        const start = parseISO(startDateRaw)
+        const end = parseISO(endDateRaw)
+
+        if (!isValid(start) || !isValid(end)) {
+          errors.push(`Row ${idx + 1}: invalid date value`)
+          return
+        }
+
+        if (end < start) {
+          errors.push(`Row ${idx + 1}: endDate before startDate`)
+          return
+        }
+
+        newTrips.push({
+          id: Date.now() + idx,
+          startDate: startDateRaw,
+          endDate: endDateRaw,
+          destination,
+          countAsAbsence,
+        })
       })
 
       onUpdate([...trips, ...newTrips])
       setCsvText('')
-      alert(`Imported ${newTrips.length} trips`)
+
+      if (errors.length) {
+        alert(
+          `Imported ${newTrips.length} trips. Skipped ${errors.length} row(s):\n\n` +
+            errors.slice(0, 12).join('\n') +
+            (errors.length > 12 ? '\n\n(Showing first 12 errors)' : '')
+        )
+      } else {
+        alert(`Imported ${newTrips.length} trips`)
+      }
     } catch (e) {
       alert('CSV parsing failed: ' + e.message)
     }
   }
 
-  const sortedTrips = [...trips].sort((a, b) => 
-    new Date(b.startDate) - new Date(a.startDate)
-  )
+  const sortedTrips = [...trips].sort((a, b) => new Date(b.startDate) - new Date(a.startDate))
 
   return (
     <div className="trip-manager">
@@ -108,12 +203,46 @@ export default function TripManager({ trips, onUpdate }) {
             value={formData.endDate}
             onChange={(e) => setFormData({ ...formData, endDate: e.target.value })}
           />
-          <input
-            type="text"
-            placeholder="Destination (e.g., Mexico, France)"
-            value={formData.destination}
-            onChange={(e) => setFormData({ ...formData, destination: e.target.value })}
-          />
+          
+          <div className="destination-input-group">
+            <input
+              type="text"
+              placeholder="Add country (e.g., France)"
+              value={destinationInput}
+              onChange={(e) => setDestinationInput(e.target.value)}
+              onKeyPress={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault()
+                  addDestination()
+                }
+              }}
+            />
+            <button 
+              type="button" 
+              onClick={addDestination}
+              className="btn-add-destination"
+            >
+              + Add
+            </button>
+          </div>
+
+          {getDestinations(formData.destination).length > 0 && (
+            <div className="destination-tags">
+              {getDestinations(formData.destination).map((dest, i) => (
+                <span key={i} className="destination-tag">
+                  {dest}
+                  <button
+                    type="button"
+                    onClick={() => removeDestination(dest)}
+                    className="remove-tag"
+                  >
+                    ×
+                  </button>
+                </span>
+              ))}
+            </div>
+          )}
+
           <label>
             <input
               type="checkbox"
@@ -122,13 +251,11 @@ export default function TripManager({ trips, onUpdate }) {
             />
             Count as absence
           </label>
+
           {editingId ? (
             <>
               <button onClick={() => handleUpdate(editingId)}>Update</button>
-              <button onClick={() => {
-                setEditingId(null)
-                setFormData({ startDate: '', endDate: '', destination: '', countAsAbsence: true })
-              }}>Cancel</button>
+              <button onClick={resetForm}>Cancel</button>
             </>
           ) : (
             <button onClick={handleAdd}>Add Trip</button>
@@ -139,11 +266,14 @@ export default function TripManager({ trips, onUpdate }) {
       <div className="csv-import">
         <h3>Bulk Import (CSV)</h3>
         <p>Format: startDate,endDate,destination,countAsAbsence</p>
+        <p>
+          Dates must be ISO format: <code>YYYY-MM-DD</code>. For multiple countries, use quotes: <code>"France, Germany"</code>
+        </p>
         <textarea
-          placeholder="2023-01-15,2023-01-30,Mexico,true"
+          placeholder={'startDate,endDate,destination,countAsAbsence\n2023-01-15,2023-01-30,"France, Germany",true'}
           value={csvText}
           onChange={(e) => setCsvText(e.target.value)}
-          rows={4}
+          rows={6}
         />
         <button onClick={handleCSVImport}>Import CSV</button>
       </div>
@@ -159,29 +289,48 @@ export default function TripManager({ trips, onUpdate }) {
                 <th>Start Date</th>
                 <th>End Date</th>
                 <th>Days</th>
-                <th>Destination</th>
+                <th>Destination(s)</th>
                 <th>Counts?</th>
                 <th>Actions</th>
               </tr>
             </thead>
             <tbody>
               {sortedTrips.map(trip => {
-                const days = differenceInDays(
-                  parseISO(trip.endDate), 
-                  parseISO(trip.startDate)
-                )
+                const start = parseISO(trip.startDate)
+                const end = parseISO(trip.endDate)
+
+                if (!isValid(start) || !isValid(end)) {
+                  return (
+                    <tr key={trip.id} className="warning-row">
+                      <td colSpan={6}>
+                        Invalid trip dates: "{trip.startDate}" → "{trip.endDate}"
+                      </td>
+                    </tr>
+                  )
+                }
+
+                const days = differenceInDays(end, start)
                 const isLong = days >= 180
+                const destinations = getDestinations(trip.destination)
 
                 return (
                   <tr key={trip.id} className={isLong ? 'warning-row' : ''}>
-                    <td>{format(parseISO(trip.startDate), 'MMM d, yyyy')}</td>
-                    <td>{format(parseISO(trip.endDate), 'MMM d, yyyy')}</td>
+                    <td>{format(start, 'MMM d, yyyy')}</td>
+                    <td>{format(end, 'MMM d, yyyy')}</td>
                     <td>
                       {days}
                       {days >= 365 && ' 🚫'}
                       {days >= 180 && days < 365 && ' ⚠️'}
                     </td>
-                    <td>{trip.destination || '—'}</td>
+                    <td>
+                      {destinations.length > 0 ? (
+                        <div className="destination-tags-display">
+                          {destinations.map((dest, i) => (
+                            <span key={i} className="destination-pill">{dest}</span>
+                          ))}
+                        </div>
+                      ) : '—'}
+                    </td>
                     <td>{trip.countAsAbsence !== false ? 'Yes' : 'No'}</td>
                     <td>
                       <button onClick={() => handleEdit(trip)}>Edit</button>

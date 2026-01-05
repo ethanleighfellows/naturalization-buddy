@@ -5,7 +5,6 @@ import { loadCivicsProgress } from '../utils/storage'
 
 export default function DataPackExport({ profile, trips }) {
   const [civicsProgress, setCivicsProgress] = useState({ attempts: [] })
-  const [includePersonal, setIncludePersonal] = useState(false)
 
   useEffect(() => {
     loadCivicsProgress().then(p => setCivicsProgress(p))
@@ -16,10 +15,7 @@ export default function DataPackExport({ profile, trips }) {
   const exportJSON = () => {
     const dataPackage = {
       exportDate: new Date().toISOString(),
-      profile: includePersonal ? profile : {
-        ...profile,
-        dob: '[REDACTED]'
-      },
+      profile,
       trips,
       civicsProgress,
       eligibility
@@ -45,7 +41,6 @@ export default function DataPackExport({ profile, trips }) {
       try {
         const data = JSON.parse(event.target.result)
         if (confirm('Import this data? Current data will be replaced.')) {
-          // Would trigger parent state updates in full implementation
           alert('Import functionality: In production, this would restore the data to your app.')
         }
       } catch (err) {
@@ -59,26 +54,14 @@ export default function DataPackExport({ profile, trips }) {
     window.print()
   }
 
-  const totalCorrect = civicsProgress.attempts.reduce((sum, a) => sum + a.totalCorrect, 0)
-  const totalQuestions = civicsProgress.attempts.reduce((sum, a) => sum + a.questions.length, 0)
-  const civicsAccuracy = totalQuestions > 0 ? ((totalCorrect / totalQuestions) * 100).toFixed(1) : 0
-
   return (
     <div className="data-pack-export">
       <div className="no-print">
         <h2>Data Pack Export</h2>
-
+        
         <div className="export-options">
           <h3>Export Options</h3>
-          <label>
-            <input
-              type="checkbox"
-              checked={includePersonal}
-              onChange={(e) => setIncludePersonal(e.target.checked)}
-            />
-            Include personal information (DOB) in export
-          </label>
-
+          
           <div className="export-buttons">
             <button onClick={printDataPack} className="btn-primary">
               🖨️ Print to PDF
@@ -110,7 +93,7 @@ export default function DataPackExport({ profile, trips }) {
             <tbody>
               <tr>
                 <td><strong>Date of Birth</strong></td>
-                <td>{includePersonal ? format(parseISO(profile.dob), 'MMMM d, yyyy') : '[REDACTED]'}</td>
+                <td>{format(parseISO(profile.dob), 'MMMM d, yyyy')}</td>
               </tr>
               <tr>
                 <td><strong>LPR Since</strong></td>
@@ -137,6 +120,16 @@ export default function DataPackExport({ profile, trips }) {
           <p className={eligibility.eligible ? 'status-eligible' : 'status-not-eligible'}>
             <strong>{eligibility.eligible ? '✅ ELIGIBLE' : '⏳ NOT YET ELIGIBLE'}</strong>
           </p>
+          
+          {eligibility.earliestFilingDate && (
+            <div style={{ marginTop: '1rem' }}>
+              <p><strong>Earliest possible filing:</strong> {format(parseISO(eligibility.earliestFilingDate), 'MMMM d, yyyy')}</p>
+              {eligibility.lowerRiskFilingDate && (
+                <p><strong>Lower-risk filing date:</strong> {format(parseISO(eligibility.lowerRiskFilingDate), 'MMMM d, yyyy')}</p>
+              )}
+            </div>
+          )}
+
           {!eligibility.eligible && (
             <>
               <h3>Blockers</h3>
@@ -153,6 +146,7 @@ export default function DataPackExport({ profile, trips }) {
               </ul>
             </>
           )}
+          
           <table className="data-table">
             <tbody>
               <tr>
@@ -165,11 +159,10 @@ export default function DataPackExport({ profile, trips }) {
               </tr>
               <tr>
                 <td><strong>Physical Presence</strong></td>
-                <td>{eligibility.metrics.physicalPresence.daysInUS} days ({eligibility.metrics.physicalPresence.percentInUS}%)</td>
-              </tr>
-              <tr>
-                <td><strong>Days Abroad</strong></td>
-                <td>{eligibility.metrics.physicalPresence.daysAbroad}</td>
+                <td>
+                  {eligibility.metrics.physicalPresence.daysInUS} / {eligibility.metrics.physicalPresence.requiredDaysInUS} days 
+                  ({eligibility.metrics.physicalPresence.percentOfRequirement.toFixed(1)}%)
+                </td>
               </tr>
             </tbody>
           </table>
@@ -184,53 +177,22 @@ export default function DataPackExport({ profile, trips }) {
                 <th>End Date</th>
                 <th>Days</th>
                 <th>Destination</th>
-                <th>Flag</th>
               </tr>
             </thead>
             <tbody>
-              {trips.map((trip, i) => {
-                const days = differenceInDays(parseISO(trip.endDate), parseISO(trip.startDate))
-                return (
-                  <tr key={i}>
-                    <td>{format(parseISO(trip.startDate), 'MMM d, yyyy')}</td>
-                    <td>{format(parseISO(trip.endDate), 'MMM d, yyyy')}</td>
-                    <td>{days}</td>
-                    <td>{trip.destination || '—'}</td>
-                    <td>
-                      {days >= 365 && '🚫 ≥1 year'}
-                      {days >= 180 && days < 365 && '⚠️ ≥180 days'}
-                    </td>
-                  </tr>
-                )
-              })}
-            </tbody>
-          </table>
-        </section>
-
-        <section className="print-section">
-          <h2>Civics Test Readiness</h2>
-          <table className="data-table">
-            <tbody>
-              <tr>
-                <td><strong>Practice Attempts</strong></td>
-                <td>{civicsProgress.attempts.length}</td>
-              </tr>
-              <tr>
-                <td><strong>Questions Answered</strong></td>
-                <td>{totalQuestions}</td>
-              </tr>
-              <tr>
-                <td><strong>Overall Accuracy</strong></td>
-                <td>{civicsAccuracy}%</td>
-              </tr>
-              <tr>
-                <td><strong>Passing Threshold</strong></td>
-                <td>60% (6 of 10 questions)</td>
-              </tr>
-              <tr>
-                <td><strong>Assessment</strong></td>
-                <td>{civicsAccuracy >= 60 ? '✅ Likely Ready' : '⚠️ Needs More Practice'}</td>
-              </tr>
+              {trips
+                .sort((a, b) => new Date(b.startDate) - new Date(a.startDate))
+                .map((trip, i) => {
+                  const days = differenceInDays(parseISO(trip.endDate), parseISO(trip.startDate))
+                  return (
+                    <tr key={i}>
+                      <td>{format(parseISO(trip.startDate), 'MMM d, yyyy')}</td>
+                      <td>{format(parseISO(trip.endDate), 'MMM d, yyyy')}</td>
+                      <td>{days}</td>
+                      <td>{trip.destination || '—'}</td>
+                    </tr>
+                  )
+                })}
             </tbody>
           </table>
         </section>

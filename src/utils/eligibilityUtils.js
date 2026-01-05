@@ -6,6 +6,7 @@ import {
   addYears,
   addMonths,
   subYears,
+  subDays,
   parseISO,
   isAfter,
   isBefore,
@@ -80,7 +81,7 @@ export function calculateEligibility(profile, trips, asOfDate = new Date()) {
     )
   }
 
-  // 4) Absences / continuous residence analysis + recovery dates (two-date model)
+  // 4) Absences / continuous residence analysis + recovery dates (two-date model with rolling window)
   const absenceAnalysis = analyzeAbsences(trips, lprDate, asOfDate, requiredYears, eligibilityPath)
   metrics.absences = absenceAnalysis
 
@@ -132,11 +133,12 @@ export function calculateEligibility(profile, trips, asOfDate = new Date()) {
 }
 
 /**
- * Absence / continuity analysis:
+ * Absence / continuity analysis with ROLLING 5-YEAR WINDOW logic:
  * - ≥365 days => continuity broken + compute recovery date (return + 4y + 1d)
+ *   AND rolling-window date (tripEnd + 5y - 179d)
  * - >180 and <365 => continuity risk + compute:
- *   - earliestPossibleAfterContinuityIssue = return + 4y + 1d
- *   - lowerRiskAfterContinuityIssue = return + 4y + 6m
+ *   - earliestPossibleAfterContinuityIssue = return + 4y + 1d (fileable with rebuttal)
+ *   - lowerRiskAfterContinuityIssue = tripEnd + 5y - 179d (when trip is <180 days in lookback)
  */
 function analyzeAbsences(trips, lprDate, asOfDate, requiredYears, eligibilityPath) {
   const relevantTrips = trips
@@ -147,49 +149,65 @@ function analyzeAbsences(trips, lprDate, asOfDate, requiredYears, eligibilityPat
       days: differenceInDays(parseISO(t.endDate), parseISO(t.startDate)),
     }))
     .filter(t => t.countAsAbsence !== false)
-    .filter(t => isAfter(t.start, lprDate) || t.start.getTime() === lprDate.getTime())
-    .filter(t => isBefore(t.start, asOfDate) || t.start.getTime() === asOfDate.getTime())
+
+  // Only count trips that overlap the [lprDate, asOfDate] window
+  const windowStart = lprDate
+  const windowEnd = asOfDate
+
+  const tripsInWindow = relevantTrips.filter(t =>
+    overlaps(t.start, t.end, windowStart, windowEnd)
+  )
 
   const warnings = []
   let continuityBroken = false
 
-  // Only compute these “recovery” dates for the 5-year path per your request
+  // Only compute "recovery" dates for 5-year path per your request
   let earliestPossibleAfterContinuityIssue = null
   let lowerRiskAfterContinuityIssue = null
 
-  relevantTrips.forEach(trip => {
+  tripsInWindow.forEach(trip => {
     if (trip.days >= 365) {
       continuityBroken = true
       warnings.push(
-        `Trip to ${trip.destination || 'unknown'} (${trip.start.toLocaleDateString()}) was ${trip.days} days (≥ 1 year) - may break continuous residence`
+        `Trip to ${trip.destination || 'unknown'} (${trip.start.toLocaleDateString()}) was ${trip.days} days (≥ 1 year) - breaks continuous residence`
       )
 
       if (eligibilityPath === '5-year') {
-        const earliest = addDays(addYears(trip.end, 4), 1) // return + 4y + 1d
+        // Earliest possible (with evidence of preserved ties): return + 4y + 1d
+        const earliest = addDays(addYears(trip.end, 4), 1)
         earliestPossibleAfterContinuityIssue = maxDate(earliestPossibleAfterContinuityIssue, earliest)
+
+        // Lower-risk (rolling window): first date when trip is ≤179 days in lookback
+        // This applies to ALL long trips, even ≥1 year
+        const lowerRisk = subDays(addYears(trip.end, 5), 179)
+        lowerRiskAfterContinuityIssue = maxDate(lowerRiskAfterContinuityIssue, lowerRisk)
       }
     } else if (trip.days > 180 && trip.days < 365) {
       warnings.push(
-        `Trip to ${trip.destination || 'unknown'} (${trip.start.toLocaleDateString()}) was ${trip.days} days (> 6 months) - may raise continuous residence questions`
+        `Trip to ${trip.destination || 'unknown'} (${trip.start.toLocaleDateString()}) was ${trip.days} days (> 6 months) - may affect continuous residence`
       )
 
       if (eligibilityPath === '5-year') {
-        const earliest = addDays(addYears(trip.end, 4), 1) // return + 4y + 1d
-        const lowerRisk = addMonths(addYears(trip.end, 4), 6) // return + 4y + 6m
+        // Earliest possible (with rebuttal burden): return + 4y + 1d
+        const earliest = addDays(addYears(trip.end, 4), 1)
         earliestPossibleAfterContinuityIssue = maxDate(earliestPossibleAfterContinuityIssue, earliest)
+
+        // Lower-risk (rolling window): first date when trip is ≤179 days in lookback
+        // Formula: tripEnd + 5 years - 179 days
+        const lowerRisk = subDays(addYears(trip.end, 5), 179)
         lowerRiskAfterContinuityIssue = maxDate(lowerRiskAfterContinuityIssue, lowerRisk)
       }
     }
   })
 
-  const totalDaysAbsent = relevantTrips.reduce((sum, t) => sum + t.days, 0)
+  const totalDaysAbsent = tripsInWindow.reduce((sum, t) => sum + t.days, 0)
 
   return {
-    totalTrips: relevantTrips.length,
+    totalTrips: tripsInWindow.length,
     totalDaysAbsent,
     continuityBroken,
     warnings,
-    longAbsences: relevantTrips.filter(t => t.days >= 180),
+    longAbsences: tripsInWindow.filter(t => t.days >= 180),
     earliestPossibleAfterContinuityIssue: earliestPossibleAfterContinuityIssue
       ? earliestPossibleAfterContinuityIssue.toISOString()
       : null,
@@ -239,6 +257,11 @@ function calculatePhysicalPresence(trips, asOfDate, eligibilityPath) {
 }
 
 // Helpers
+function overlaps(aStart, aEnd, bStart, bEnd) {
+  // Two date ranges overlap if: start1 <= end2 AND end1 >= start2
+  return aStart <= bEnd && aEnd >= bStart
+}
+
 function maxDate(a, b) {
   if (!a) return b
   if (!b) return a
